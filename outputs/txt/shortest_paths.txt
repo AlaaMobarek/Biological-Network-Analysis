@@ -1,0 +1,17 @@
+======================================================================
+  SHORTEST PATH(S) REPORT
+======================================================================
+  Source protein : P04637
+  Target protein : P00533
+  Paths found    : 1
+======================================================================
+
+Minimum total weight  (sum of 1/confidence) : 2.110052
+
+-- Path 1  (1 edge(s)) ----------------------------------------
+   Nodes              : P04637 -> P00533
+   Total weight       : 2.110052
+   Total confidence   : 0.473922
+   Edge breakdown:
+     P04637 -> P00533  |  confidence=0.4739  weight(1/conf)=2.1101  method=SPIKE
+
