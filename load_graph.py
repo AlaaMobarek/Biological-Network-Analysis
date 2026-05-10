@@ -553,7 +553,290 @@ def shortest_path_smoke_test(G, source=SOURCE_ID, target=TARGET_ID):
     except nx.NetworkXNoPath:
         print(f"[full] No directed path from {src_name} to {tgt_name}.")
 
+def draw_top_hubs(
+        G: nx.DiGraph,
+        top_n: int = 20,
+        out_path: str = "outputs/figures/top_hubs.png"):
+    """
+    Draw a graph of the Top-N hub proteins
+    (highest total degree in the interactome).
 
+    Features
+    --------
+    - Light theme
+    - Node size proportional to total degree
+    - Node color based on functional group
+    - Edge color reflects interaction confidence
+    - Degree shown below each node
+    - Graph statistics shown in title
+    """
+
+    print(f"\n[hubs] Selecting Top-{top_n} hub proteins...")
+
+    # ─────────────────────────────────────────────────────────────
+    # 1) Compute total degree for all proteins
+    # ─────────────────────────────────────────────────────────────
+    degree_dict = dict(G.degree())
+
+    # Sort descending by degree
+    top_hubs = sorted(
+        degree_dict.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:top_n]
+
+    hub_nodes = [node for node, deg in top_hubs]
+
+    print(f"[hubs] Top hubs selected:")
+
+    for i, (node, deg) in enumerate(top_hubs, 1):
+
+        gene = G.nodes[node].get("gene_name", node)
+
+        print(
+            f"   {i:>2}. "
+            f"{gene:<10} ({node})   "
+            f"degree={deg}"
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # 2) Create subgraph
+    # ─────────────────────────────────────────────────────────────
+    H = G.subgraph(hub_nodes).copy()
+
+    print(
+        f"[hubs] Subgraph: "
+        f"{H.number_of_nodes()} nodes, "
+        f"{H.number_of_edges()} edges"
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 3) Layout
+    # ─────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(16, 12))
+
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("#f8f9fa")
+
+    pos = nx.spring_layout(
+        H,
+        seed=42,
+        k=1.2
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 4) Node sizes proportional to degree
+    # ─────────────────────────────────────────────────────────────
+    max_deg = max(degree_dict[n] for n in H.nodes())
+
+    node_sizes = [
+        500 + 3500 * (degree_dict[n] / max_deg)
+        for n in H.nodes()
+    ]
+
+    # ─────────────────────────────────────────────────────────────
+    # 5) Node colors by functional group
+    # ─────────────────────────────────────────────────────────────
+    node_colors = []
+
+    for n in H.nodes():
+
+        group = PROTEIN_GROUP.get(n, "Other")
+
+        node_colors.append(
+            GROUP_COLORS.get(group, "#cccccc")
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # 6) Edge confidence weights
+    # ─────────────────────────────────────────────────────────────
+    edge_weights = [
+        H[u][v].get("weight", 0.5)
+        for u, v in H.edges()
+    ]
+
+    edge_widths = [
+        1.0 + 4.0 * w
+        for w in edge_weights
+    ]
+
+    edge_colors = [
+        plt.cm.coolwarm(w)
+        for w in edge_weights
+    ]
+
+    # ─────────────────────────────────────────────────────────────
+    # 7) Draw edges
+    # ─────────────────────────────────────────────────────────────
+    for (u, v), col, wid in zip(
+            H.edges(),
+            edge_colors,
+            edge_widths):
+
+        nx.draw_networkx_edges(
+            H,
+            pos,
+            edgelist=[(u, v)],
+            edge_color=[col],
+            width=wid,
+            alpha=0.75,
+            arrows=True,
+            arrowsize=18,
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.08",
+            ax=ax
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # 8) Draw nodes
+    # ─────────────────────────────────────────────────────────────
+    nx.draw_networkx_nodes(
+        H,
+        pos,
+        node_size=node_sizes,
+        node_color=node_colors,
+        edgecolors="black",
+        linewidths=1.2,
+        alpha=0.95,
+        ax=ax
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 9) Labels (gene names)
+    # ─────────────────────────────────────────────────────────────
+    labels = {
+        n: G.nodes[n].get("gene_name", n)
+        for n in H.nodes()
+    }
+
+    nx.draw_networkx_labels(
+        H,
+        pos,
+        labels,
+        font_size=9,
+        font_weight="bold",
+        font_color="black",
+        ax=ax
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 10) Degree annotation BELOW each node
+    # ─────────────────────────────────────────────────────────────
+    for node, (x, y) in pos.items():
+
+        ax.text(
+            x,
+            y - 0.07,
+            f"deg={degree_dict[node]}",
+            ha="center",
+            va="top",
+            fontsize=6,
+            color="#444444",
+            bbox=dict(
+                facecolor="white",
+                edgecolor="#cccccc",
+                alpha=0.85,
+                boxstyle="round,pad=0.2"
+            ),
+            zorder=5
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # 11) Functional group legend
+    # ─────────────────────────────────────────────────────────────
+    shown_groups = sorted({
+        PROTEIN_GROUP.get(n, "Other")
+        for n in H.nodes()
+    })
+
+    legend_patches = [
+        mpatches.Patch(
+            facecolor=GROUP_COLORS.get(g, "#cccccc"),
+            edgecolor="#555555",
+            linewidth=0.8,
+            label=g.replace("_", " ")
+        )
+        for g in shown_groups
+    ]
+
+    ax.legend(
+        handles=legend_patches,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.08),
+        fontsize=8,
+        ncol=4,
+        framealpha=0.95,
+        facecolor="white",
+        edgecolor="#999999",
+        title="Functional Group",
+        title_fontsize=9
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 12) Colorbar for edge confidence
+    # ─────────────────────────────────────────────────────────────
+    sm = plt.cm.ScalarMappable(
+        cmap=plt.cm.coolwarm,
+        norm=plt.Normalize(vmin=0, vmax=1)
+    )
+
+    sm.set_array([])
+
+    cbar = plt.colorbar(
+        sm,
+        ax=ax,
+        fraction=0.025,
+        pad=0.02
+    )
+
+    cbar.set_label(
+        "Interaction Confidence",
+        fontsize=9
+    )
+
+    cbar.ax.tick_params(labelsize=7)
+
+    # ─────────────────────────────────────────────────────────────
+    # 13) Graph statistics in title
+    # ─────────────────────────────────────────────────────────────
+    density = nx.density(H)
+
+    plt.title(
+        f"Top-{top_n} Hub Proteins in Interactome\n"
+        f"Nodes: {H.number_of_nodes()}   |   "
+        f"Interactions: {H.number_of_edges()}   |   "
+        f"Density: {density:.3f}\n"
+        f"Node Size = Degree   |   "
+        f"Edge Color = Confidence",
+        fontsize=15,
+        fontweight="bold",
+        color="black",
+        pad=16
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 14) Final formatting
+    # ─────────────────────────────────────────────────────────────
+    plt.axis("off")
+
+    plt.tight_layout(
+        rect=[0, 0.05, 1, 1]
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 15) Save figure
+    # ─────────────────────────────────────────────────────────────
+    plt.savefig(
+        out_path,
+        dpi=200,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor()
+    )
+
+    plt.close()
+
+    print(f"[hubs] Figure saved -> {out_path}")
+    
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
 
@@ -577,13 +860,14 @@ if __name__ == "__main__":
             G_draw = G_pathway
         draw_kegg_style(G_draw, SOURCE_ID, TARGET_ID, CONF_THRESHOLD, OUT_FIG)
 
+
     # ── 2. Full interactome DiGraph (no filter) ────────────────────────────────
     print("\n[full] Building complete interactome graph (all proteins, all edges)...")
     G_interactome = build_full_graph(INTERACTOME)
     print_full_graph_summary(G_interactome)
     save_full_graph(G_interactome, OUT_GRAPHML, OUT_GPICKLE)
     shortest_path_smoke_test(G_interactome)
-
+    draw_top_hubs(G_interactome, top_n=25)
     print("\n[full] To reload in another script:")
     print("       import pickle")
     print(f"       with open('{OUT_GPICKLE}', 'rb') as f: G = pickle.load(f)")

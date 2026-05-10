@@ -1,241 +1,473 @@
-"""
-shortest_path.py
-────────────────
-Member 2 — Shortest Path Analysis
-
-Responsibilities:
-    - Given two proteins, find all acyclic shortest paths between them
-    - Report total path score and each edge weight
-    - Draw and save the sub-network formed by these paths
-
-Usage (standalone):
-    python scripts/shortest_path.py
-
-Usage (from main.py):
-    from scripts.shortest_path import find_shortest_paths
-    find_shortest_paths(G, source="P04637", target="P00533")
-"""
-
-import os
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+import os
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-TXT_DIR = "Code/outputs/txt"
-FIG_DIR = "Code/outputs/figures"
-os.makedirs(TXT_DIR, exist_ok=True)
-os.makedirs(FIG_DIR, exist_ok=True)
+# Import graph loading function
+from load_graph import load_graph
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FUNCTION 1 — Find all acyclic shortest paths between two proteins
-# ══════════════════════════════════════════════════════════════════════════════
-def find_shortest_paths(G: nx.DiGraph, source: str, target: str):
+# =============================================================================
+# STEP 1: Find ALL Acyclic Shortest Paths Using Yen's Algorithm
+# =============================================================================
+
+def find_all_shortest_paths(G, source, target):
     """
-    Finds all acyclic shortest paths between two proteins in the interactome,
-    reports path scores and edge weights, saves results to a text file,
-    and draws the sub-network of these paths.
-
-    Parameters
-    ----------
-    G      : nx.DiGraph  — the loaded interactome graph
-    source : str         — UniProt ID of the source/start protein
-    target : str         — UniProt ID of the target/end protein
+    Find ALL simple (acyclic) paths that share the minimum total cost.
     """
-    print(f"\n[shortest_path] Finding paths: {source} → {target}")
 
-    # ── Validate nodes exist in graph ─────────────────────────────────────────
-    for node, label in [(source, "Source"), (target, "Target")]:
-        if node not in G:
-            print(f"  ⚠ {label} protein '{node}' not found in graph.")
-            return
+    # Validate source and target existence
+    if source not in G:
+        raise ValueError(f"Source '{source}' not found in the network.")
+    if target not in G:
+        raise ValueError(f"Target '{target}' not found in the network.")
 
-    # ── Find all simple (acyclic) shortest paths ───────────────────────────────
+    # Use Dijkstra to compute the minimum path cost
     try:
-        # Get the shortest path length first
-        shortest_len = nx.shortest_path_length(G, source=source, target=target, weight= "weight")
+        min_cost = nx.shortest_path_length(
+            G,
+            source,
+            target,
+            weight='cost'
+        )
 
-        # Get ALL simple paths of exactly that length (all shortest paths)
-        all_paths = [
-            p for p in nx.all_simple_paths(G, source=source, target=target,
-                                           cutoff=shortest_len)
-            if len(p) - 1 == shortest_len
-        ]
     except nx.NetworkXNoPath:
-        print(f"  ✗ No path exists between {source} and {target}.")
-        return
-    except nx.NodeNotFound as e:
-        print(f"  ✗ Node error: {e}")
-        return
+        raise nx.NetworkXNoPath(
+            f"No path between '{source}' and '{target}'."
+        )
 
-    print(f"  Found {len(all_paths)} shortest path(s) of length {shortest_len}")
+    print(
+        f"[Dijkstra]  Minimum internal cost "
+        f"(sum of 1-conf) = {min_cost:.6f}"
+    )
 
-    # ── Compute path scores & edge weights ────────────────────────────────────
-    path_results = []
+    # Collect all shortest simple paths with the same minimum cost
+    shortest_paths = []
+    tolerance = 1e-9
 
-    for path in all_paths:
-        edges       = list(zip(path[:-1], path[1:]))           # pairs of nodes
-        edge_weights = [G[u][v]["weight"] for u, v in edges]   # weight per edge
-        methods      = [G[u][v]["method"] for u, v in edges]   # method per edge
+    for path in nx.shortest_simple_paths(
+        G,
+        source,
+        target,
+        weight='cost'
+    ):
 
-        # Path score = product of all edge weights (combined confidence)
-        path_score = float(np.prod(edge_weights))
+        path_cost = sum(
+            G[path[i]][path[i + 1]]['cost']
+            for i in range(len(path) - 1)
+        )
 
-        path_results.append({
-            "path"        : path,
-            "edges"       : edges,
-            "weights"     : edge_weights,
-            "methods"     : methods,
-            "score"       : path_score,
-        })
+        if abs(path_cost - min_cost) < tolerance:
+            shortest_paths.append(path)
+        else:
+            break
 
-    # Sort paths by score descending (best path first)
-    path_results.sort(key=lambda x: x["score"], reverse=True)
+    # Compute total confidence score
+    total_score = sum(
+        G[shortest_paths[0][i]][shortest_paths[0][i + 1]]['confidence']
+        for i in range(len(shortest_paths[0]) - 1)
+    )
 
-    # ── Save results to text file ─────────────────────────────────────────────
-    out_txt = os.path.join(TXT_DIR, "shortest_paths.txt")
-    with open(out_txt, "w") as f:
-        f.write(f"Shortest Paths Analysis\n")
-        f.write(f"{'='*60}\n")
-        f.write(f"Source protein : {source}\n")
-        f.write(f"Target protein : {target}\n")
-        f.write(f"Path length    : {shortest_len} interaction(s)\n")
-        f.write(f"Total paths    : {len(all_paths)}\n")
-        f.write(f"{'='*60}\n\n")
+    print(f"[Yen's]     {len(shortest_paths)} path(s) found.")
+    print(
+        f"[INFO]      Total Path Score "
+        f"(sum of confidence) = {total_score:.6f}"
+    )
 
-        for i, result in enumerate(path_results, 1):
-            f.write(f"Path {i}:\n")
-            f.write(f"  Route      : {' → '.join(result['path'])}\n")
-            f.write(f"  Path score : {result['score']:.6f}  "
-                    f"(product of all edge weights)\n")
-            f.write(f"  Edge details:\n")
-            for (u, v), w, m in zip(result["edges"],
-                                     result["weights"],
-                                     result["methods"]):
-                f.write(f"    {u} → {v}  |  weight: {w:.6f}  |  "
-                        f"method: {m}\n")
+    return shortest_paths, min_cost, total_score
+
+
+# =============================================================================
+# STEP 2: Write Results to Text File
+# =============================================================================
+
+def write_paths_to_file(
+    G,
+    paths,
+    min_cost,
+    total_score,
+    source,
+    target,
+    output_file
+):
+    """
+    Save all shortest paths and statistics into a text report.
+    """
+
+    # Create output directory if it does not exist
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    with open(output_file, 'w', encoding='utf-8') as f:
+
+        # Report header
+        f.write("=" * 70 + "\n")
+        f.write("  ACYCLIC SHORTEST PATH(S) ANALYSIS\n")
+        f.write("=" * 70 + "\n")
+
+        f.write(f"  Source Protein                        : {source}\n")
+        f.write(f"  Target Protein                        : {target}\n")
+        f.write(f"  Total Shortest Paths Found            : {len(paths)}\n")
+        f.write(f"\n")
+
+        f.write(
+            f"  Total Path Score "
+            f"(sum of confidence)  : {total_score:.6f}\n"
+        )
+
+        f.write(
+            f"  [Internal cost  "
+            f"(sum of 1-conf)       : {min_cost:.6f}]\n"
+        )
+
+        f.write("=" * 70 + "\n")
+
+        # Write every shortest path
+        for idx, path in enumerate(paths, start=1):
+
+            f.write("\n\n")
+            f.write("*" * 70 + "\n")
+            f.write(f"  PATH {idx} of {len(paths)}\n")
+            f.write("*" * 70 + "\n")
+
+            f.write(
+                f"\n  Sequence "
+                f"({len(path)} nodes, {len(path)-1} edges):\n\n"
+            )
+
+            f.write(f"      {' -> '.join(path)}\n")
             f.write("\n")
 
-    print(f"  Results saved → {out_txt}")
+            path_score = 0.0
 
-    # ── Draw subnetwork ────────────────────────────────────────────────────────
-    _draw_path_subnetwork(G, path_results, source, target)
+            f.write(
+                f"  {'Edge':<45} "
+                f"{'Weight (Confidence)':>20}\n"
+            )
+
+            f.write(
+                f"  {'-'*45} "
+                f"{'-'*20}\n"
+            )
+
+            # Write edge-by-edge confidence
+            for i in range(len(path) - 1):
+
+                u, v = path[i], path[i + 1]
+                conf = G[u][v]['confidence']
+
+                f.write(
+                    f"  {f'{u} -> {v}':<45} "
+                    f"{conf:>20.6f}\n"
+                )
+
+                path_score += conf
+
+            avg_conf = path_score / (len(path) - 1)
+
+            f.write("\n")
+
+            f.write(
+                f"  {'Total Path Score (sum of confidence)':<45} "
+                f"{path_score:>20.6f}\n"
+            )
+
+            f.write(
+                f"  {'Average Confidence per Edge':<45} "
+                f"{avg_conf:>20.6f}\n"
+            )
+
+        # Report footer
+        f.write("\n" + "=" * 70 + "\n")
+        f.write("  END OF REPORT\n")
+        f.write("=" * 70 + "\n")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FUNCTION 2 — Draw the sub-network of shortest paths
-# ══════════════════════════════════════════════════════════════════════════════
-def _draw_path_subnetwork(G: nx.DiGraph, path_results: list,
-                          source: str, target: str):
+# =============================================================================
+# STEP 3: Draw the Sub-Network
+# =============================================================================
+
+def draw_subnetwork(
+    G,
+    paths,
+    source,
+    target,
+    total_score,
+    output_image
+):
     """
-    Draws and saves the sub-network formed by all shortest paths.
-
-    Parameters
-    ----------
-    G            : nx.DiGraph — full graph (for edge attribute lookup)
-    path_results : list       — output of find_shortest_paths()
-    source       : str        — source protein UniProt ID
-    target       : str        — target protein UniProt ID
+    Draw the shortest-path subnetwork and save it as an image.
     """
-    # ── Build subgraph from all path edges ────────────────────────────────────
-    sub_edges = set()
-    sub_nodes = set()
-    for result in path_results:
-        for edge in result["edges"]:
-            sub_edges.add(edge)
-        sub_nodes.update(result["path"])
 
-    sub = G.edge_subgraph(sub_edges).copy()
+    # Build subgraph from all shortest paths
+    sub_G = nx.DiGraph()
 
-    # ── Layout & styling ──────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(13, 8))
-    fig.patch.set_facecolor("#0f1117")
-    ax.set_facecolor("#1a1d27")
+    for path in paths:
 
-    # Hierarchical left-to-right layout using shell layout
-    pos = nx.spring_layout(sub, seed=7, k=1.2)
+        for i in range(len(path) - 1):
 
-    # Node colors: source=green, target=red, intermediate=cyan
-    node_colors = []
-    for n in sub.nodes():
-        if n == source:
-            node_colors.append("#2ecc71")   # green
-        elif n == target:
-            node_colors.append("#e74c3c")   # red
-        else:
-            node_colors.append("#00d4ff")   # cyan
+            u, v = path[i], path[i + 1]
 
-    node_sizes = [900 if n in (source, target) else 500
-                  for n in sub.nodes()]
+            sub_G.add_edge(
+                u,
+                v,
+                confidence=G[u][v]['confidence'],
+                cost=G[u][v]['cost']
+            )
 
-    # Edge colors by weight
-    edge_weights = [sub[u][v]["weight"] for u, v in sub.edges()]
-    edge_colors  = [plt.cm.YlOrRd(w) for w in edge_weights]
+    # Count intermediate nodes
+    n_mid = len([
+        n for n in sub_G.nodes()
+        if n != source and n != target
+    ])
 
-    # Draw
-    nx.draw_networkx_nodes(sub, pos, node_color=node_colors,
-                           node_size=node_sizes, alpha=0.95, ax=ax)
-    nx.drrkx_edges(sub, pos, edge_color=edge_colors,
-                           width=2.5, arrows=True, arrowsize=18,
-                           connectionstyle="arc3,rad=0.12", ax=ax)
-    nx.draw_networkx_labels(sub, pos, font_size=8,
-                            font_color="white", font_weight="bold", ax=ax)
-
-    # Edge weight labels
-    edge_labels = {(u, v): f"{sub[u][v]['weight']:.3f}"
-                   for u, v in sub.edges()}
-    nx.draw_networkx_edge_labels(sub, pos, edge_labels=edge_labels,
-                                 font_size=6, font_color="#f0e68c", ax=ax)
-
-    # Colorbar
-    sm = plt.cm.ScalarMappable(
-        cmap=plt.cm.YlOrRd,
-        norm=plt.Normalize(vmin=min(edge_weights), vmax=max(edge_weights))
+    # Generate node positions
+    pos = nx.spring_layout(
+        sub_G,
+        k=2.5,
+        iterations=200,
+        seed=42
     )
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, fraction=0.025, pad=0.02)
-    cbar.set_label("Edge Weight (confidence)", color="#e0e0e0", fontsize=9)
-    cbar.ax.yaxis.set_tick_params(color="#e0e0e0", labelsize=7)
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="#e0e0e0")
+
+    # Define node appearance
+    node_colors = []
+    node_sizes = []
+
+    for n in sub_G.nodes():
+
+        if n == source:
+            node_colors.append('#00FF7F')
+            node_sizes.append(3500)
+
+        elif n == target:
+            node_colors.append('#FF4500')
+            node_sizes.append(3500)
+
+        else:
+            node_colors.append('#00BFFF')
+            node_sizes.append(2500)
+
+    # Edge confidence values
+    confidences = [
+        sub_G[u][v]['confidence']
+        for u, v in sub_G.edges()
+    ]
+
+    edge_colors = plt.cm.plasma(np.array(confidences))
+
+    # Edge labels
+    edge_labels = {
+        (u, v): f"{sub_G[u][v]['confidence']:.2f}"
+        for u, v in sub_G.edges()
+    }
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(16, 12))
+
+    fig.patch.set_facecolor('#121212')
+    ax.set_facecolor('#121212')
+
+    # Draw edges
+    nx.draw_networkx_edges(
+        sub_G,
+        pos,
+        ax=ax,
+        edge_color=edge_colors,
+        edge_cmap=plt.cm.plasma,
+        arrows=True,
+        arrowsize=30,
+        arrowstyle='-|>',
+        width=1.2,
+        alpha=0.9,
+        connectionstyle='arc3,rad=0.2',
+        min_source_margin=25,
+        min_target_margin=25,
+    )
+
+    # Draw nodes
+    nx.draw_networkx_nodes(
+        sub_G,
+        pos,
+        ax=ax,
+        node_color=node_colors,
+        node_size=node_sizes,
+        alpha=0.9,
+        linewidths=3,
+        edgecolors='#FFFFFF'
+    )
+
+    # Draw node labels
+    nx.draw_networkx_labels(
+        sub_G,
+        pos,
+        ax=ax,
+        font_size=11,
+        font_color='black',
+        font_weight='bold'
+    )
+
+    # Draw edge labels
+    nx.draw_networkx_edge_labels(
+        sub_G,
+        pos,
+        edge_labels=edge_labels,
+        ax=ax,
+        font_size=9,
+        font_color='#FFFFFF',
+        bbox=dict(
+            boxstyle='round,pad=0.3',
+            fc='#2E2E2E',
+            alpha=0.8,
+            ec='none'
+        ),
+        label_pos=0.5,
+    )
 
     # Legend
-    legend_patches = [
-        mpatches.Patch(color="#2ecc71", label=f"Source: {source}"),
-        mpatches.Patch(color="#e74c3c", label=f"Target: {target}"),
-        mpatches.Patch(color="#00d4ff", label="Intermediate protein"),
-    ]
-    ax.legend(handles=legend_patches, loc="upper left",
-              facecolor="#1a1d27", edgecolor="#2e3250",
-              labelcolor="#e0e0e0", fontsize=8)
+    ax.legend(
+        handles=[
+            mpatches.Patch(
+                color='#00FF7F',
+                label=f'Source: {source}'
+            ),
 
-    ax.set_title(
-        f"Shortest Path Sub-Network: {source} → {target}\n"
-        f"({len(path_results)} path(s), length = "
-        f"{len(path_results[0]['path']) - 1} interactions)",
-        color="#e0e0e0", fontsize=12, fontweight="bold", pad=10
+            mpatches.Patch(
+                color='#FF4500',
+                label=f'Target: {target}'
+            ),
+
+            mpatches.Patch(
+                color='#00BFFF',
+                label=f'Intermediate nodes ({n_mid})'
+            ),
+        ],
+
+        loc='upper left',
+        facecolor='#1E1E1E',
+        edgecolor='gray',
+        labelcolor='white',
+        fontsize=12
     )
-    ax.axis("off")
+
+    # Colorbar for confidence values
+    sm = plt.cm.ScalarMappable(
+        cmap='plasma',
+        norm=plt.Normalize(0, 1)
+    )
+
+    sm.set_array([])
+
+    cbar = plt.colorbar(
+        sm,
+        ax=ax,
+        shrink=0.5,
+        pad=0.02
+    )
+
+    cbar.set_label(
+        'Interaction Confidence',
+        color='white',
+        fontsize=12,
+        fontweight='bold'
+    )
+
+    cbar.ax.yaxis.set_tick_params(color='white')
+
+    plt.setp(
+        plt.getp(cbar.ax.axes, 'yticklabels'),
+        color='white'
+    )
+
+    # Figure title
+    ax.set_title(
+        f"Protein-Protein Interaction: "
+        f"Acyclic Shortest Paths Network\n"
+        f"{source}  →  {target}  |  "
+        f"{len(paths)} path(s)  |  "
+        f"Total Path Score: {total_score:.4f}",
+
+        color='white',
+        fontsize=16,
+        fontweight='bold',
+        pad=25
+    )
+
+    ax.axis('off')
+
     plt.tight_layout()
 
-    out_path = os.path.join(FIG_DIR, "shortest_path_subnetwork.png")
-    plt.savefig(out_path, dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
-    plt.close()
-    print(f"  Figure saved  → {out_path}\n")
+    # Create output folder
+    os.makedirs(
+        os.path.dirname(output_image),
+        exist_ok=True
+    )
+
+    # Save figure
+    plt.savefig(
+        output_image,
+        dpi=300,
+        bbox_inches='tight',
+        facecolor=fig.get_facecolor()
+    )
+
+    # Close figure to free memory
+    plt.close(fig)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN — runs when executed directly
-# ══════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    from load_graph import load_graph
+# =============================================================================
+# STEP 4: Complete Analysis Pipeline
+# =============================================================================
 
-    DATA_PATH = "Code/data/PathLinker_2018_human-ppi-weighted-cap0_75.txt"
-    G = load_graph(DATA_PATH)
+def run_shortest_paths_pipeline(
+    G,
+    source,
+    target,
+    output_txt,
+    output_img
+):
+    """
+    Run the complete shortest-path analysis pipeline:
 
-    # Change these two proteins to any UniProt IDs in your dataset
-    find_shortest_paths(G, source="P04637", target="P00533")
+    1. Find shortest paths
+    2. Save text report
+    3. Draw and save subnetwork
+    """
 
-    print("✅ shortest_path.py complete!\n")
+    print(f"\n[INFO] Analyzing: {source} -> {target}")
+
+    try:
+
+        # Find shortest paths
+        paths, min_cost, total_score = find_all_shortest_paths(
+            G,
+            source,
+            target
+        )
+
+        # Save text report
+        write_paths_to_file(
+            G,
+            paths,
+            min_cost,
+            total_score,
+            source,
+            target,
+            output_txt
+        )
+
+        print(f"[INFO] Text report saved -> {output_txt}")
+
+        # Draw network figure
+        draw_subnetwork(
+            G,
+            paths,
+            source,
+            target,
+            total_score,
+            output_img
+        )
+
+        print(f"[INFO] Figure saved -> {output_img}")
+
+    except (ValueError, nx.NetworkXNoPath) as e:
+        print(f"[ERROR] {e}")

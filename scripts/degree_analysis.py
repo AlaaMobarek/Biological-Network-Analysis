@@ -1,21 +1,3 @@
-"""
-degree_analysis.py
-──────────────────
-Member 3 — Degree Analysis
-
-Responsibilities:
-    - Given a set of proteins, draw a degree histogram
-    - Rank proteins from most to least connected
-    - Save ranking to a text file and histogram to a figure
-
-Usage (standalone):
-    python scripts/degree_analysis.py
-
-Usage (from main.py):
-    from scripts.degree_analysis import analyze_degrees
-    analyze_degrees(G, proteins=["P04637", "P00533", "P06400"])
-"""
-
 import os
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -23,8 +5,8 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-TXT_DIR = "Code/outputs/txt"
-FIG_DIR = "Code/outputs/figures"
+TXT_DIR = "outputs/txt"
+FIG_DIR = "outputs/figures"
 os.makedirs(TXT_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
@@ -75,29 +57,29 @@ def analyze_degrees(G: nx.DiGraph, proteins: list):
     # ── Rank by total degree (highest first) ──────────────────────────────────
     results.sort(key=lambda x: x["total"], reverse=True)
 
-    # ── Print ranking to console ───────────────────────────────────────────────
-    print(f"\n  {'Rank':<5} {'Protein':<14} {'Total':>7} "
+    # Print ranking to console
+    print(f"  {'Rank':<5} {'Protein':<14} {'Total':>7} "
           f"{'In':>7} {'Out':>7}")
-    print(f"  {'─'*46}")
+    print(f"  {'-'*46}")
     for i, r in enumerate(results, 1):
         print(f"  {i:<5} {r['protein']:<14} {r['total']:>7} "
               f"{r['in_degree']:>7} {r['out_degree']:>7}")
 
     # ── Save ranking to text file ─────────────────────────────────────────────
     out_txt = os.path.join(TXT_DIR, "degree_ranking.txt")
-    with open(out_txt, "w") as f:
+    with open(out_txt, "w", encoding="utf-8") as f:
         f.write(f"Degree Ranking Analysis\n")
         f.write(f"{'='*55}\n")
         f.write(f"Proteins analyzed : {len(results)}\n")
         f.write(f"{'='*55}\n\n")
         f.write(f"{'Rank':<5} {'Protein':<14} {'Total':>7} "
                 f"{'In':>7} {'Out':>7}\n")
-        f.write(f"{'─'*46}\n")
+        f.write(f"{'-'*46}\n")
         for i, r in enumerate(results, 1):
             f.write(f"{i:<5} {r['protein']:<14} {r['total']:>7} "
                     f"{r['in_degree']:>7} {r['out_degree']:>7}\n")
 
-    print(f"\n  Ranking saved → {out_txt}")
+    print(f"\n  Ranking saved -> {out_txt}")
 
     # ── Plot ──────────────────────────────────────────────────────────────────
     _draw_degree_histogram(results)
@@ -185,24 +167,6 @@ def _draw_degree_histogram(results: list):
     plt.savefig(out_path, dpi=150, bbox_inches="tight",
                 facecolor=fig.get_facecolor())
     plt.close()
-    print(f"  Figure saved  → {out_path}\n")
+    print(f"  Figure saved  -> {out_path}\n")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN — runs when executed directly
-# ══════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    from load_graph import load_graph
-
-    DATA_PATH = "Code/data/PathLinker_2018_human-ppi-weighted-cap0_75.txt"
-    G = load_graph(DATA_PATH)
-
-    # Change this list to any UniProt IDs in your dataset
-    proteins = [
-        "P04637", "P00533", "P06400", "Q09472",
-        "P38936", "P12931", "P27986", "P62993",
-        "O14543", "P43403"
-    ]
-    analyze_degrees(G, proteins)
-
-    print("✅ degree_analysis.py complete!\n")

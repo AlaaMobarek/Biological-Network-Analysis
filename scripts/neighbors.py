@@ -1,17 +1,7 @@
+
 """
 neighbors.py
-────────────
-Layout:
-    - Query protein at CENTER (large red circle)
-    - 6 clusters arranged around it like a clock face
-    - Nodes are RANDOMLY SCATTERED inside each cluster disk (not in a ring)
-    - Cluster background = soft colored disk
-    - Arrow color matches the cluster color
-    - Node color matches the cluster
 
-Usage (standalone):   python scripts/neighbors.py
-Usage (from main.py): from scripts.neighbors import get_neighbors
-                      get_neighbors(G, protein="P04637")
 """
 
 import os
@@ -23,38 +13,48 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-TXT_DIR   = "outputs/txt"
-FIG_DIR   = "outputs/figures"
+# ── Output directories ─────────────────────────────────────────────────────────
+TXT_DIR = "outputs/txt"
+FIG_DIR = "outputs/figures"
 os.makedirs(TXT_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
+# ── Confidence thresholds ──────────────────────────────────────────────────────
 HIGH_CONF = 0.75
 MED_CONF  = 0.50
 
-# ── Cluster config: angle (°), base orbit radius, colors, label ───────────────
+# ── Node / disk sizing constants ───────────────────────────────────────────────
+NODE_R       = 0.18    # radius of every neighbor circle
+QUERY_R      = 0.50    # radius of the center query circle
+MAX_DISK_R   = 3.50    # hard cap on cluster background disk radius
+MIN_DISK_R   = 0.55    # minimum disk radius (for clusters with 1–2 nodes)
+ORBIT_GAP    = 0.80    # guaranteed clear gap between disk edge and center area
+DISK_SPACING = 0.50    # extra gap between adjacent cluster disks
+
+# ── Cluster config: angle (°), colors, label ──────────────────────────────────
+# 'radius' is now a BASE only — actual orbit is computed dynamically below
 CLUSTERS = {
-    "out_high": dict(angle=120, radius=5.0,
+    "out_high": dict(angle=120,
                      node_fc="#1a9e5c", node_ec="#0e6b3a",
                      edge_col="#27ae60",
-                     label="Outgoing HIGH  (conf ≥ 0.75)"),
-    "out_med":  dict(angle=60,  radius=5.0,
+                     label="Outgoing HIGH  (conf >= 0.75)"),
+    "out_med":  dict(angle=60,
                      node_fc="#17a589", node_ec="#0e7260",
                      edge_col="#1abc9c",
-                     label="Outgoing MED   (0.50–0.75)"),
-    "out_low":  dict(angle=0,   radius=5.0,
+                     label="Outgoing MED   (0.50-0.75)"),
+    "out_low":  dict(angle=0,
                      node_fc="#d4ac0d", node_ec="#9a7d0a",
                      edge_col="#f1c40f",
                      label="Outgoing LOW   (conf < 0.50)"),
-    "in_high":  dict(angle=300, radius=5.0,
+    "in_high":  dict(angle=300,
                      node_fc="#1a5276", node_ec="#0e3457",
                      edge_col="#2980b9",
-                     label="Incoming HIGH  (conf ≥ 0.75)"),
-    "in_med":   dict(angle=240, radius=5.0,
+                     label="Incoming HIGH  (conf >= 0.75)"),
+    "in_med":   dict(angle=240,
                      node_fc="#6c3483", node_ec="#4a235a",
                      edge_col="#9b59b6",
-                     label="Incoming MED   (0.50–0.75)"),
-    "in_low":   dict(angle=180, radius=5.0,
+                     label="Incoming MED   (0.50-0.75)"),
+    "in_low":   dict(angle=180,
                      node_fc="#a93226", node_ec="#7b241c",
                      edge_col="#e74c3c",
                      label="Incoming LOW   (conf < 0.50)"),
@@ -68,15 +68,17 @@ def get_neighbors(G: nx.DiGraph, protein: str):
     print(f"\n[neighbors] Analyzing neighbors of: {protein}")
 
     if protein not in G:
-        print(f"  ⚠  Protein '{protein}' not found in graph.")
+        print(f"  Warning: Protein '{protein}' not found in graph.")
         return
 
+    # Collect successors (protein -> neighbor)
     successors = []
     for nbr in G.successors(protein):
         w = G[protein][nbr]["weight"]
         m = G[protein][nbr].get("method", "unknown")
         successors.append((nbr, w, m))
 
+    # Collect predecessors (neighbor -> protein)
     predecessors = []
     for nbr in G.predecessors(protein):
         w = G[nbr][protein]["weight"]
@@ -88,7 +90,8 @@ def get_neighbors(G: nx.DiGraph, protein: str):
 
     in_deg  = G.in_degree(protein)
     out_deg = G.out_degree(protein)
-    print(f"  Total degree       : {in_deg+out_deg}  (in={in_deg}, out={out_deg})")
+    print(f"  Total degree       : {in_deg + out_deg}  "
+          f"(in={in_deg}, out={out_deg})")
     print(f"  Outgoing neighbors : {len(successors)}")
     print(f"  Incoming neighbors : {len(predecessors)}")
 
@@ -105,7 +108,7 @@ def _save_results(protein, successors, predecessors, in_deg, out_deg):
         f.write("Neighbor Analysis\n")
         f.write(f"{'='*60}\n")
         f.write(f"Query protein  : {protein}\n")
-        f.write(f"Total degree   : {in_deg+out_deg}\n")
+        f.write(f"Total degree   : {in_deg + out_deg}\n")
         f.write(f"  In-degree    : {in_deg}\n")
         f.write(f"  Out-degree   : {out_deg}\n")
         f.write(f"{'='*60}\n\n")
@@ -113,20 +116,24 @@ def _save_results(protein, successors, predecessors, in_deg, out_deg):
         f.write(f"OUTGOING ({len(successors)})  -- {protein} -> neighbor:\n")
         f.write(f"{'─'*60}\n")
         for nbr, w, m in successors:
-            tier = "HIGH" if w >= HIGH_CONF else "MED" if w >= MED_CONF else "LOW"
-            f.write(f"  {nbr:<12}  weight: {w:.6f}  [{tier}]  method: {m}\n")
+            tier = ("HIGH" if w >= HIGH_CONF else
+                    "MED"  if w >= MED_CONF  else "LOW")
+            f.write(f"  {nbr:<12}  weight: {w:.6f}  [{tier}]  "
+                    f"method: {m}\n")
 
         f.write(f"\nINCOMING ({len(predecessors)})  -- neighbor -> {protein}:\n")
         f.write(f"{'─'*60}\n")
         for nbr, w, m in predecessors:
-            tier = "HIGH" if w >= HIGH_CONF else "MED" if w >= MED_CONF else "LOW"
-            f.write(f"  {nbr:<12}  weight: {w:.6f}  [{tier}]  method: {m}\n")
+            tier = ("HIGH" if w >= HIGH_CONF else
+                    "MED"  if w >= MED_CONF  else "LOW")
+            f.write(f"  {nbr:<12}  weight: {w:.6f}  [{tier}]  "
+                    f"method: {m}\n")
 
     print(f"  Results saved -> {out_txt}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER — Assign neighbors into buckets
+# HELPER — Assign neighbors into confidence-tier buckets
 # ══════════════════════════════════════════════════════════════════════════════
 def _assign_buckets(successors, predecessors):
     buckets = {k: [] for k in CLUSTERS}
@@ -142,68 +149,66 @@ def _assign_buckets(successors, predecessors):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER — Scatter nodes randomly inside a disk, no overlaps
+# HELPER — Compute CAPPED disk radius for a cluster of n nodes
 # ══════════════════════════════════════════════════════════════════════════════
-def _scatter_in_disk(
-        nodes,
-        cx,
-        cy,
-        disk_r,
-        node_r,
-        rng,
-        min_margin=0.45,
-        max_tries=400):
+def _disk_radius(n: int) -> float:
     """
-    Scatter nodes randomly INSIDE a safe inner region
-    of the disk while preventing overlaps.
+    Ideal radius grows with sqrt(n) so the disk area is proportional
+    to the number of nodes. Hard-capped at MAX_DISK_R so large clusters
+    don't dominate the figure.
 
-    Parameters
-    ----------
-    min_margin : float
-        Minimum distance from outer boundary.
+    For very small clusters the disk is set to MIN_DISK_R so there is
+    always a visible background circle.
     """
+    if n == 0:
+        return 0.0
+    ideal = NODE_R * 2.8 * math.sqrt(n)
+    return max(MIN_DISK_R, min(ideal, MAX_DISK_R))
 
-    pos = {}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPER — Scatter nodes randomly inside a disk without overlaps
+# ══════════════════════════════════════════════════════════════════════════════
+def _scatter_in_disk(nodes, cx, cy, disk_r, node_r, rng, max_tries=500):
+    """
+    Place each node at a uniformly random position inside the disk of
+    radius `disk_r`, keeping nodes at least 2*node_r apart (rejection
+    sampling). Falls back gracefully if no non-overlapping spot is found
+    after max_tries attempts.
+    """
+    pos    = {}
     placed = []
 
-    # Effective usable radius
-    effective_r = max(disk_r - min_margin - node_r, node_r)
+    # Leave a margin so nodes don't sit on the disk boundary
+    usable_r = max(disk_r - node_r - 0.10, node_r)
 
     for node in nodes:
-
-        placed_ok = False
-
+        accepted = False
         for _ in range(max_tries):
-
-            # Uniform random point inside INNER disk
-            r = effective_r * math.sqrt(rng.random())
+            r     = usable_r * math.sqrt(rng.random())
             theta = rng.random() * 2 * math.pi
+            x     = cx + r * math.cos(theta)
+            y     = cy + r * math.sin(theta)
 
-            x = cx + r * math.cos(theta)
-            y = cy + r * math.sin(theta)
-
-            # Prevent overlaps
             too_close = any(
-                math.hypot(x - px, y - py) <= 2.0 * node_r
+                math.hypot(x - px, y - py) < 2.0 * node_r
                 for px, py in placed
             )
-
             if not too_close:
-                placed_ok = True
+                accepted = True
                 break
 
-        # fallback
-        if not placed_ok:
-            angle = rng.random() * 2 * math.pi
-            r = effective_r * 0.8
-
-            x = cx + r * math.cos(angle)
-            y = cy + r * math.sin(angle)
+        if not accepted:
+            # Fallback: place anywhere inside a slightly larger radius
+            theta = rng.random() * 2 * math.pi
+            x     = cx + usable_r * 0.9 * math.cos(theta)
+            y     = cy + usable_r * 0.9 * math.sin(theta)
 
         pos[node] = (x, y)
         placed.append((x, y))
 
     return pos
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FUNCTION 3 — Draw the cluster network
@@ -211,51 +216,71 @@ def _scatter_in_disk(
 def _draw_cluster_graph(G: nx.DiGraph, protein: str,
                          successors: list, predecessors: list):
 
-    buckets   = _assign_buckets(successors, predecessors)
-    rng       = np.random.default_rng(seed=42)   # reproducible scatter
+    buckets = _assign_buckets(successors, predecessors)
+    rng     = np.random.default_rng(seed=42)   # reproducible layout
 
-    NODE_R    = 0.18    # radius of each protein circle
-    QUERY_R   = 0.50    # radius of the center (query) circle
+    # ── Step 1: compute each cluster's disk radius ────────────────────────────
+    disk_r = {}
+    for ckey, bucket in buckets.items():
+        disk_r[ckey] = _disk_radius(len(bucket))
 
-    # ── Compute disk radius for each cluster proportional to node count ────────
-    def _disk_radius(n):
-        # Enough area to fit n circles of radius NODE_R with some breathing room
-        if n == 0:   return 0.5
-        if n == 1:   return NODE_R * 2.5
-        return max(1.2, NODE_R * 2.5 * math.sqrt(n))
+    # ── Step 2: compute orbit distance for each cluster ───────────────────────
+    # Orbit = distance from origin to cluster CENTER.
+    # We want:   orbit > QUERY_R + ORBIT_GAP + disk_r   (no overlap with center)
+    # We also want each cluster disk NOT to overlap its two angular neighbors.
+    #
+    # For 6 equally-spaced clusters (60 deg apart), the chord between adjacent
+    # centers at orbit distance R is:  chord = 2 * R * sin(30 deg) = R
+    # So the minimum orbit so adjacent disks don't touch is:
+    #   R >= disk_r[A] + disk_r[B] + DISK_SPACING
+    #
+    # We compute a single orbit radius that satisfies ALL constraints.
 
-    # ── Build all positions ────────────────────────────────────────────────────
+    ckeys  = list(CLUSTERS.keys())
+    n_clus = len(ckeys)
+
+    # Constraint 1: clear of center
+    orbit_min_center = [
+        QUERY_R + ORBIT_GAP + disk_r[ck]
+        for ck in ckeys
+    ]
+
+    # Constraint 2: clear of angular neighbors (clusters are 60 deg apart)
+    # chord = orbit * 2 * sin(pi/6) = orbit * 1.0  =>  orbit >= dr_A + dr_B + gap
+    orbit_min_neighbors = []
+    for i, ck in enumerate(ckeys):
+        left_ck  = ckeys[(i - 1) % n_clus]
+        right_ck = ckeys[(i + 1) % n_clus]
+        needed   = (disk_r[ck] + disk_r[left_ck]  + DISK_SPACING,
+                    disk_r[ck] + disk_r[right_ck] + DISK_SPACING)
+        orbit_min_neighbors.append(max(needed))
+
+    # Use one shared orbit radius = max of all constraints (keeps layout tidy)
+    orbit = max(max(orbit_min_center), max(orbit_min_neighbors))
+
+    # ── Step 3: cluster centers ───────────────────────────────────────────────
+    cluster_centers = {}
+    for ckey, cfg in CLUSTERS.items():
+        ang = math.radians(cfg["angle"])
+        cluster_centers[ckey] = (orbit * math.cos(ang),
+                                  orbit * math.sin(ang))
+
+    # ── Step 4: scatter nodes inside each cluster disk ────────────────────────
     pos       = {protein: (0.0, 0.0)}
     node_meta = {protein: ("#e74c3c", "#922b21", "query")}
 
-    cluster_centers = {}   # ckey -> (cx, cy)
-    cluster_disk_r  = {}   # ckey -> disk_r
-
     for ckey, cfg in CLUSTERS.items():
         nodes_in = [n for n, _ in buckets[ckey]]
-        n        = len(nodes_in)
-        d_r      = _disk_radius(n)
-
-        # Orbit: push cluster center further out so disk doesn't overlap center
-        orbit = cfg["radius"] + d_r * 0.9
-        ang   = math.radians(cfg["angle"])
-        cx    = orbit * math.cos(ang)
-        cy    = orbit * math.sin(ang)
-
-        cluster_centers[ckey] = (cx, cy)
-        cluster_disk_r[ckey]  = d_r
-
-        if n == 0:
+        if not nodes_in:
             continue
-
-        # Scatter nodes randomly inside the disk
-        scatter = _scatter_in_disk(nodes_in, cx, cy, d_r, NODE_R, rng)
+        cx, cy = cluster_centers[ckey]
+        scatter = _scatter_in_disk(nodes_in, cx, cy,
+                                   disk_r[ckey], NODE_R, rng)
         pos.update(scatter)
-
         for node in nodes_in:
             node_meta[node] = (cfg["node_fc"], cfg["node_ec"], ckey)
 
-    # ── Figure ────────────────────────────────────────────────────────────────
+    # ── Figure setup ──────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(24, 24))
     fig.patch.set_facecolor("#ffffff")
     ax.set_facecolor("#ffffff")
@@ -267,31 +292,30 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
         if n == 0:
             continue
         cx, cy = cluster_centers[ckey]
-        d_r    = cluster_disk_r[ckey]
+        dr     = disk_r[ckey]
 
-        # Soft filled disk
-        bg = plt.Circle((cx, cy), d_r,
+        bg = plt.Circle((cx, cy), dr,
                          facecolor=cfg["node_fc"],
                          edgecolor=cfg["node_ec"],
-                         alpha=0.10,
-                         linewidth=1.5,
+                         alpha=0.12,
+                         linewidth=1.8,
                          linestyle="--",
                          zorder=0)
         ax.add_patch(bg)
 
-        # Cluster label just outside the disk
+        # Label just outside the disk, pushed further along the same angle
         ang = math.radians(cfg["angle"])
-        lx  = cx + (d_r + 0.5) * math.cos(ang)
-        ly  = cy + (d_r + 0.5) * math.sin(ang)
+        lx  = cx + (dr + 0.65) * math.cos(ang)
+        ly  = cy + (dr + 0.65) * math.sin(ang)
         ax.text(lx, ly,
                 f"{cfg['label']}\n({n} proteins)",
                 ha="center", va="center",
-                fontsize=7.5, color=cfg["node_ec"],
+                fontsize=8, color=cfg["node_ec"],
                 fontweight="bold",
                 bbox=dict(facecolor="white",
                           edgecolor=cfg["node_ec"],
-                          boxstyle="round,pad=0.3",
-                          alpha=0.90),
+                          boxstyle="round,pad=0.35",
+                          alpha=0.92),
                 zorder=6)
 
     # ── Draw edges ────────────────────────────────────────────────────────────
@@ -307,56 +331,42 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
         xu, yu = pos[u]
         xv, yv = pos[v]
 
-        # Color from the neighbor's cluster
         nbr        = v if u == protein else u
         _, _, ckey = node_meta.get(nbr, ("#888", "#555", None))
-        edge_col   = CLUSTERS[ckey]["edge_col"] if ckey in CLUSTERS else "#888888"
+        edge_col   = (CLUSTERS[ckey]["edge_col"]
+                      if ckey in CLUSTERS else "#888888")
 
-        alpha = 0.45 + 0.50 * w
-        lw    = 1.0  + 2.2  * w
+        alpha = 0.40 + 0.55 * w
+        lw    = 0.8  + 2.0  * w
 
-        # Node radii
-        start_r = QUERY_R if u == protein else NODE_R
-        end_r   = QUERY_R if v == protein else NODE_R
-
-        # Direction vector
-        dx = xv - xu
-        dy = yv - yu
+        dx   = xv - xu
+        dy   = yv - yu
         dist = math.hypot(dx, dy)
-
-
         if dist == 0:
             continue
 
         ux = dx / dist
         uy = dy / dist
 
-        # Push arrow outside node borders
-        start_x = xu + ux * start_r
-        start_y = yu + uy * start_r
+        start_r = QUERY_R if u == protein else NODE_R
+        end_r   = QUERY_R if v == protein else NODE_R
 
-        end_x = xv - ux * end_r
-        end_y = yv - uy * end_r
-
-        # Draw directed edge
         ax.annotate(
             "",
-            xy=(end_x, end_y),
-            xytext=(start_x, start_y),
-
+            xy    =(xu + ux * (dist - end_r),
+                    yu + uy * (dist - end_r)),
+            xytext=(xu + ux * start_r,
+                    yu + uy * start_r),
             arrowprops=dict(
-                arrowstyle="-|>",      # better arrow head
+                arrowstyle="-|>",
                 color=edge_col,
                 lw=lw,
                 alpha=alpha,
-
                 shrinkA=0,
                 shrinkB=0,
-
-                mutation_scale=16,     # BIGGER arrows
-                connectionstyle="arc3,rad=0.08",
+                mutation_scale=14,
+                connectionstyle="arc3,rad=0.06",
             ),
-
             zorder=2
         )
 
@@ -376,11 +386,9 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
             r, lw_c, fs, tc = NODE_R, 1.0, 5.0, "white"
             zo               = 4
 
-        circ = plt.Circle((x, y), r,
-                           facecolor=fc, edgecolor=ec,
-                           linewidth=lw_c, zorder=zo)
-        ax.add_patch(circ)
-
+        ax.add_patch(plt.Circle((x, y), r,
+                                facecolor=fc, edgecolor=ec,
+                                linewidth=lw_c, zorder=zo))
         ax.text(x, y, node,
                 ha="center", va="center",
                 fontsize=fs, fontweight="bold",
@@ -394,7 +402,8 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
 
     handles = [
         mpatches.Patch(facecolor="#e74c3c", edgecolor="#922b21",
-                       label=f"Query: {protein}  (degree={in_deg+out_deg})"),
+                       label=f"Query: {protein}  "
+                             f"(degree={in_deg + out_deg})"),
         mpatches.Patch(facecolor="#8e44ad", edgecolor="#6c3483",
                        label=f"Bidirectional  ({both_n} proteins)"),
     ] + [
@@ -406,23 +415,24 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
 
     ax.legend(handles=handles,
               loc="lower center",
-              bbox_to_anchor=(0.5, -0.04),
-              fontsize=8.5, framealpha=0.95, ncol=4,
-              title=(f"Neighbor Network — {protein}  |  "
-                     f"in={in_deg}  out={out_deg}  total={in_deg+out_deg}"),
-              title_fontsize=9.5,
+              bbox_to_anchor=(0.5, -0.03),
+              fontsize=9, framealpha=0.95, ncol=4,
+              title=(f"Neighbor Network -- {protein}  |  "
+                     f"in={in_deg}  out={out_deg}  "
+                     f"total={in_deg + out_deg}"),
+              title_fontsize=10,
               edgecolor="#cccccc")
 
     ax.set_title(
         f"Neighbor Network of  {protein}\n"
-        f"Total degree: {in_deg+out_deg}  (in={in_deg}, out={out_deg})  "
-        f"·  Clusters by direction & confidence tier",
+        f"Total degree: {in_deg + out_deg}  "
+        f"(in={in_deg}, out={out_deg})  --  "
+        f"Clusters by direction & confidence tier",
         fontsize=14, fontweight="bold", pad=16, color="#2c3e50")
 
-    # Fit axes tightly around all placed nodes
     all_x = [p[0] for p in pos.values()]
     all_y = [p[1] for p in pos.values()]
-    pad   = 1.5
+    pad   = MAX_DISK_R + 1.5
     ax.set_xlim(min(all_x) - pad, max(all_x) + pad)
     ax.set_ylim(min(all_y) - pad, max(all_y) + pad)
     ax.axis("off")
@@ -435,16 +445,3 @@ def _draw_cluster_graph(G: nx.DiGraph, protein: str,
     plt.close()
     print(f"  Figure saved  -> {out_path}\n")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    from load_graph import load_graph
-
-    DATA_PATH = "data/PathLinker_2018_human-ppi-weighted-cap0_75.txt"
-    G = load_graph(DATA_PATH)
-
-    get_neighbors(G, protein="P10721")
-
-    print("✅ neighbors.py complete!\n")

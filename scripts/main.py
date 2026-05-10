@@ -1,125 +1,100 @@
-"""
-main.py
-───────
-Project Entry Point — Protein-Protein Interaction Network Analysis
-
-Runs the full analysis pipeline in order:
-    1. Load the interactome graph
-    2. Compute & visualize full network statistics
-    3. Find shortest paths between two proteins
-    4. Analyze neighbors of one protein
-    5. Analyze degrees of a set of proteins
-    6. Map UniProt IDs to gene names
-    7. Save the adjacency matrix
-
-Usage:
-    python main.py
-"""
-
-import sys
 import os
 
-# Add scripts/ folder to path so imports work
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "Code", "scripts"))
+# Import custom analysis and utility functions
+from adjacency_matrix import (
+    convert_to_unweighted,
+    save_edge_list,
+    save_full_adjacency_matrix,
+    plot_sample_heatmap,
+)
+from degree_analysis import analyze_degrees
+from graph_visualization import run_pathway_visualization, draw_top_hubs
+from load_graph import (
+    DEFAULT_DATA_FILE,
+    DEFAULT_GRAPHML_PATH,
+    DEFAULT_GPICKLE_PATH,
+    load_graph,
+    save_full_graph,
+)
+from mapping import map_uniprot_to_gene
+from neighbors import get_neighbors
+from shortest_path import run_shortest_paths_pipeline
 
-from load_graph        import load_graph, compute_statistics, plot_statistics
-from shortest_path     import find_shortest_paths
-from neighbors         import get_neighbors
-from degree_analysis   import analyze_degrees
-from mapping           import map_uniprot_to_gene
-from adjacency_matrix  import save_adjacency_matrix
+# Initialize project directory structure
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_ROOT = os.path.join(PROJECT_ROOT, "outputs")
+os.makedirs(os.path.join(OUTPUT_ROOT, "graphs"), exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_ROOT, "txt"), exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_ROOT, "figures"), exist_ok=True)
 
+# Define target proteins and pathway for the pipeline
+neighbor = "P10721"
+SOURCE_PROTEIN = "P04637"  # TP53
+TARGET_PROTEIN = "P00533"  # EGFR
+PATHWAY_ID = "hsa04151"    # PI3K-AKT
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION — Edit these values to customize the analysis
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Path to the interactome file
-DATA_PATH = "data/interactome.txt"
-
-# Shortest path: choose any two proteins in the dataset
-SOURCE_PROTEIN = "P04637"    # TP53
-TARGET_PROTEIN = "P00533"    # EGFR
-
-# Neighbor analysis: choose one protein
-QUERY_PROTEIN  = "P04637"    # TP53
-
-# Degree analysis: choose a set of proteins
-PROTEIN_SET = [
-    "P04637",   # TP53
-    "P00533",   # EGFR
-    "P06400",   # RB1
-    "Q09472",   # EP300
-    "P38936",   # CDKN1A
-    "P12931",   # SRC
-    "P27986",   # PIK3R1
-    "P62993",   # GRB2
-    "O14543",   # SOCS3
-    "P43403",   # ZAP70
+PROTEINS_TO_ANALYZE = [
+    "P04637", "P00533", "P06400", "Q09472", "P38936",
+    "P12931", "P27986", "P62993", "O14543", "P43403",
 ]
 
-# UniProt → gene mapping: can be any set of IDs
-MAPPING_IDS = PROTEIN_SET   # reuse the same set, or define a different list
-
-# Adjacency matrix: number of top hub proteins to include in the sample matrix
-MATRIX_SAMPLE_SIZE = 50
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PIPELINE
-# ══════════════════════════════════════════════════════════════════════════════
 def main():
-    print("\n" + "═" * 60)
-    print("   PPI NETWORK ANALYSIS — FULL PIPELINE")
-    print("═" * 60)
+    """Executes the full bioinformatics pipeline sequentially."""
+    print(f"[main] Building graph from: {DEFAULT_DATA_FILE}")
+    G = load_graph(DEFAULT_DATA_FILE, DEFAULT_GPICKLE_PATH, rebuild=True, save_on_build=False)
+    if G is None:
+        print("[main] Failed to load the interactome graph.")
+        return
 
-    # ── Step 1: Load graph ────────────────────────────────────────────────────
-    print("\n[1/6] Loading interactome graph...")
-    G = load_graph(DATA_PATH)
+    # 1. Persistence: Save the graph for future use
+    save_full_graph(G, DEFAULT_GRAPHML_PATH, DEFAULT_GPICKLE_PATH)
 
-    # ── Step 2: Network statistics & visualization ────────────────────────────
-    print("[2/6] Computing and plotting network statistics...")
-    stats = compute_statistics(G)
-    plot_statistics(G, stats)
+    # 2. Visualization: Create KEGG-based pathway map
+    print("\n[main] Running pathway visualization...")
+    run_pathway_visualization(
+        G_full=G,
+        pathway_id=PATHWAY_ID,
+        source_id=SOURCE_PROTEIN,
+        target_id=TARGET_PROTEIN,
+        conf_threshold=0.75,
+    )
 
-    # ── Step 3: Shortest path analysis ────────────────────────────────────────
-    print("[3/6] Finding shortest paths...")
-    find_shortest_paths(G, source=SOURCE_PROTEIN, target=TARGET_PROTEIN)
+    # 3. Network Metrics: Hub identification
+    print("\n[main] Drawing top hub proteins...")
+    draw_top_hubs(G, top_n=20)
 
-    # ── Step 4: Neighbor analysis ─────────────────────────────────────────────
-    print("[4/6] Analyzing neighbors...")
-    get_neighbors(G, protein=QUERY_PROTEIN)
+    # 4. Path Analysis: Source-Target interaction paths
+    print("\n[main] Running shortest-path analysis...")
+    shortest_txt = os.path.join(OUTPUT_ROOT, "txt", "shortest_paths_result.txt")
+    shortest_img = os.path.join(OUTPUT_ROOT, "figures", "shortest_paths_subnetwork.png")
+    run_shortest_paths_pipeline(
+        G=G,
+        source=SOURCE_PROTEIN,
+        target=TARGET_PROTEIN,
+        output_txt=shortest_txt,
+        output_img=shortest_img,
+    )
 
-    # ── Step 5: Degree analysis ───────────────────────────────────────────────
-    print("[5/6] Analyzing protein degrees...")
-    analyze_degrees(G, proteins=PROTEIN_SET)
+    # 5. Local Neighborhood: 1-hop connections
+    print("\n[main] Running neighbors analysis...")
+    get_neighbors(G, protein=neighbor)
 
-    # ── Step 6: UniProt → Gene mapping ────────────────────────────────────────
-    print("[6/6] Mapping UniProt IDs to gene names...")
-    map_uniprot_to_gene(MAPPING_IDS)
+    # 6. Global Stats: Degree distribution and ranking
+    print("\n[main] Running degree analysis...")
+    analyze_degrees(G, PROTEINS_TO_ANALYZE)
 
-    # ── Step 7: Adjacency matrix ──────────────────────────────────────────────
-    print("[7/7] Saving adjacency matrix...")
-    save_adjacency_matrix(G, sample_size=MATRIX_SAMPLE_SIZE)
+    # 7. Annotation: Map IDs to human-readable names via API
+    print("\n[main] Running mapping report...")
+    map_uniprot_to_gene(PROTEINS_TO_ANALYZE)
 
-    # ── Done ──────────────────────────────────────────────────────────────────
-    print("\n" + "═" * 60)
-    print("   ✅ ALL STEPS COMPLETE")
-    print("═" * 60)
-    print("\n  Output files:")
-    print("    Code/outputs/figures/graph_overview.png")
-    print("    Code/outputs/figures/shortest_path_subnetwork.png")
-    print("    Code/outputs/figures/neighbors_subgraph.png")
-    print("    Code/outputs/figures/degree_histogram.png")
-    print("    Code/outputs/figures/adjacency_matrix_heatmap.png")
-    print("    Code/outputs/txt/shortest_paths.txt")
-    print("    Code/outputs/txt/neighbors.txt")
-    print("    Code/outputs/txt/degree_ranking.txt")
-    print("    Code/outputs/txt/uniprot_gene_map.txt")
-    print("    Code/outputs/matrices/adjacency_matrix.csv")
-    print("    Code/outputs/matrices/adjacency_edgelist.txt")
-    print()
+    # 8. Matrix Export: Adjacency representations
+    print("\n[main] Running adjacency-matrix export...")
+    G_unweighted = convert_to_unweighted(G)
+    save_full_adjacency_matrix(G_unweighted, save_csv=False)
+    save_edge_list(G_unweighted)
+    plot_sample_heatmap(G_unweighted, sample_size=50)
 
+    print("\n[main] Pipeline complete.")
 
 if __name__ == "__main__":
     main()
